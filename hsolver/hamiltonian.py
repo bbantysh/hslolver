@@ -2,6 +2,7 @@
 from abc import ABC, abstractmethod
 from functools import cached_property
 from typing import NamedTuple, List
+from collections import defaultdict
 
 import numpy as np
 from scipy.linalg import expm
@@ -15,8 +16,16 @@ class SubSystem(ABC):
     :param dim: Subsystem dimension
     """
 
-    def __init__(self, dim: int):
+    __names_collections = defaultdict(lambda: 0)
+
+    def __init__(self, dim: int, name: str = None):
         self._dim = dim
+
+        if name is None:
+            class_name = self.__class__.__name__
+            self.__names_collections[class_name] += 1
+            name = class_name + str(self.__names_collections[class_name])
+        self.name = name
 
     @property
     def dim(self) -> int:
@@ -40,6 +49,9 @@ class SubSystem(ABC):
     def get_h0_matrix(self) -> np.ndarray:
         """Returns the H0 hamiltonian matrix"""
         pass
+
+    def __repr__(self):
+        return self.name
 
 
 class Interation:
