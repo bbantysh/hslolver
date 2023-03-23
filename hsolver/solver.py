@@ -1,13 +1,13 @@
 """State evolution solver."""
-from typing import List, Union, Optional, Dict
+from typing import List, Union, Optional
 from functools import cached_property
 
 import numpy as np
-from scipy.linalg import expm, block_diag, fractional_matrix_power
+from scipy.linalg import expm, fractional_matrix_power
 
 from hsolver.hamiltonian import Hamiltonian, HamiltonianTerm, SubSystem
 from hsolver.envelopes import get_common_period
-from hsolver.utils import ProgressPrinter
+from hsolver.utils import ProgressPrinter, transform_sv_tensor, mkron
 
 
 class TimeInterval:
@@ -38,16 +38,15 @@ class TimeInterval:
 
     @cached_property
     def terms_full_matrices(self) -> List[np.ndarray]:
-        """Full matrices of each term."""
+        """Full matrices of each interval term."""
         matrices = []
         for term in self.terms:
-            matrix = np.array([[1.]], dtype=complex)
-            for subsystem in self.subsystems:
-                if subsystem in term.subsystems:
-                    matrix = np.kron(matrix, term.interaction.multipliers[term.subsystems.index(subsystem)])
-                else:
-                    matrix = np.kron(matrix, np.eye(subsystem.dim))
-            matrices.append(matrix)
+            matrices_to_multiply = (
+                term.interaction.multipliers[term.subsystems.index(subsystem)]
+                if subsystem in term.subsystems else np.eye(subsystem.dim)
+                for subsystem in self.subsystems
+            )
+            matrices.append(mkron(*matrices_to_multiply))
         return matrices
 
     @cached_property
@@ -380,75 +379,3 @@ class SystemEvolutionSolver:
             w = np.linalg.eigvalsh(dm_pt)
             negativity.append(sum(np.abs(w) - w) / 2)
         return negativity
-
-
-def push_axes(tensor: np.ndarray, new_positions: List[int]) -> np.ndarray:
-    """Pushes first axes of the input tensor to specific positions
-
-    :param tensor: Input tensor
-    :param new_positions: New positions of first len(new_positions) axes
-    :return: Resulting tensor
-    """
-    axes = list(range(len(new_positions), tensor.ndim))
-    for idx_position in np.argsort(new_positions):
-        axes.insert(new_positions[idx_position], idx_position)
-    return tensor.transpose(axes)
-
-
-def transform_sv_tensor(
-        state_tensor: np.ndarray, unitary: np.ndarray, transformation_dims: Dict[int, int]
-) -> np.ndarray:
-    """Transforms state-vector tensor with some unitary matrix
-
-    :param state_tensor: Input state-vector tensor
-    :param unitary: Unitary matrix
-    :param transformation_dims: Dimensions in which the matrix is acting
-    :return: Output state-vector tensor
-    """
-    subsystems_indices = list(transformation_dims.keys())
-    subsystems_dims = list(transformation_dims.values())
-    subsystems_count = len(subsystems_indices)
-
-    # transform tensor
-    state_tensor = np.tensordot(
-        unitary.reshape(2 * subsystems_dims),
-        state_tensor,
-        axes=(range(subsystems_count, 2 * subsystems_count), subsystems_indices)
-    )
-
-    # the convoluted axis are put in the beginning, so we need to bring them back
-    state_tensor = push_axes(state_tensor, subsystems_indices)
-
-    return state_tensor
-
-
-def eye_kron(matrix: np.ndarray, dims: List[int], eye_axes: List[int]) -> np.ndarray:
-    """Gives kron product of input matrix with identity matrices
-    TODO: TESTS!!! (currently not used)
-
-    :param matrix: Input matrix
-    :param dims: Dimension of output matrix subspaces
-    :param eye_axes: Dimensions to put identity matrices
-    :return: Output matrix
-    """
-    assert matrix.ndim == 2 and matrix.shape[0] == matrix.shape[1], "Matrix should be square"
-
-    if len(eye_axes) == 0:
-        return matrix
-
-    matrix_axes = list(set(range(len(dims))) - set(eye_axes))
-
-    eye_dims = [dims[axis] for axis in eye_axes]
-    matrix_dims = [dims[axis] for axis in matrix_axes]
-
-    eye_dim = np.prod(eye_dims)
-    matrix_dim = matrix.shape[0]
-
-    matrix = block_diag(*((matrix,) * eye_dim))\
-        .reshape((eye_dim, matrix_dim) * 2)\
-        .transpose([0, 2, 1, 3])\
-        .reshape(eye_dims * 2 + matrix_dims * 2)
-
-    eye_positions = eye_axes + [len(dims) + axis for axis in eye_axes]
-    matrix = push_axes(matrix, eye_positions).reshape([np.prod(dims)] * 2)
-    return matrix
