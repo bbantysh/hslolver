@@ -1,4 +1,10 @@
-"""Utilities module"""
+"""
+Utilities module.
+
+Author: Boris Bantysh
+E-mail: bbantysh60000@gmail.com
+License: GPL-3.0
+"""
 from typing import List, Dict
 
 import numpy as np

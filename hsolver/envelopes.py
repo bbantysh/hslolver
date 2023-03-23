@@ -1,4 +1,10 @@
-"""Module for working with time envelopes"""
+"""
+Module for working with time envelopes.
+
+Author: Boris Bantysh
+E-mail: bbantysh60000@gmail.com
+License: GPL-3.0
+"""
 from abc import ABC, abstractmethod
 from typing import Optional, Callable, List
 from fractions import Fraction

@@ -1,4 +1,10 @@
-"""Collections module"""
+"""
+Collections module.
+
+Author: Boris Bantysh
+E-mail: bbantysh60000@gmail.com
+License: GPL-3.0
+"""
 from functools import cached_property
 from typing import NamedTuple
 

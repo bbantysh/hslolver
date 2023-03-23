@@ -1,4 +1,10 @@
-"""State evolution solver."""
+"""
+State evolution solver.
+
+Author: Boris Bantysh
+E-mail: bbantysh60000@gmail.com
+License: GPL-3.0
+"""
 from typing import List, Union, Optional
 from functools import cached_property
 

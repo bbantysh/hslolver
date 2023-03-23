@@ -1,4 +1,10 @@
-"""Module for working with hamiltonian"""
+"""
+Module for working with hamiltonians.
+
+Author: Boris Bantysh
+E-mail: bbantysh60000@gmail.com
+License: GPL-3.0
+"""
 from abc import ABC, abstractmethod
 from functools import cached_property
 from typing import NamedTuple, List
