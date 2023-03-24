@@ -8,7 +8,7 @@ def read(filename: str):
 
 setup(
     name="hsolver",
-    version="0.2",
+    version="0.3",
     author="Boris Bantysh",
     author_email="bbantysh60000@gmail.com",
     description="The tool for solving quantum state evolution under periodic hamiltonian",
