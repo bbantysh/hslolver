@@ -9,7 +9,8 @@ from functools import cached_property
 from typing import NamedTuple
 
 import numpy as np
-from scipy.linalg import expm
+import scipy.sparse as sparse
+import scipy.sparse.linalg
 
 from hsolver.hamiltonian import SubSystem, Hamiltonian, Interation
 from hsolver.envelopes import PeriodicEnvelope
@@ -20,17 +21,16 @@ class Spin(SubSystem):
 
     :param frequency: Spin frequency.
     """
-    sx = np.array([[0., 1.], [1., 0.]])
-    sy = np.array([[0., -1j], [1j, 0.]])
-    sz = np.array([[1., 0.], [0., -1]])
-    sp = np.array([[0, 1.], [0, 0]])
-    s0 = np.eye(2)
+    sx = sparse.csc_matrix([[0., 1.], [1., 0.]])
+    sy = sparse.csc_matrix([[0., -1j], [1j, 0.]])
+    sz = sparse.csc_matrix([[1., 0.], [0., -1]])
+    sp = sparse.csc_matrix([[0, 1.], [0, 0]])
 
     def __init__(self, frequency: float):
         super(Spin, self).__init__(2)
         self.frequency = frequency
 
-    def get_h0_matrix(self) -> np.ndarray:
+    def get_h0_matrix(self) -> sparse.csc_matrix:
         return self.frequency / 2 * self.sz
 
 
@@ -51,31 +51,31 @@ class Oscillator(SubSystem):
         return super(Oscillator, self).basis_state(jb - self.offset)
 
     @cached_property
-    def a_op(self) -> np.ndarray:
+    def a_op(self) -> sparse.csc_matrix:
         """Creation operator"""
-        return np.diag(np.sqrt(np.arange(1, self.offset + self.dim)), 1)[self.offset:, self.offset:]
+        return sparse.csc_matrix(np.diag(np.sqrt(np.arange(1, self.offset + self.dim)), 1)[self.offset:, self.offset:])
 
     @cached_property
-    def a_op_dag(self) -> np.ndarray:
+    def a_op_dag(self) -> sparse.csc_matrix:
         """Annihilation operator"""
-        return np.diag(np.sqrt(np.arange(1, self.offset + self.dim)), -1)[self.offset:, self.offset:]
+        return sparse.csc_matrix(np.diag(np.sqrt(np.arange(1, self.offset + self.dim)), -1)[self.offset:, self.offset:])
 
     @cached_property
-    def n_op(self) -> np.ndarray:
+    def n_op(self) -> sparse.csc_matrix:
         """Excitation number operator"""
-        return np.diag(np.arange(0, self.offset + self.dim))[self.offset:, self.offset:]
+        return sparse.csc_matrix(np.diag(np.arange(0, self.offset + self.dim))[self.offset:, self.offset:])
 
     @cached_property
-    def x_op(self) -> np.ndarray:
+    def x_op(self) -> sparse.csc_matrix:
         """X-quadrature operator"""
         return (self.a_op + self.a_op_dag) / np.sqrt(2)
 
     @cached_property
-    def p_op(self) -> np.ndarray:
+    def p_op(self) -> sparse.csc_matrix:
         """P-quadrature operator"""
         return -1j * (self.a_op + self.a_op_dag) / np.sqrt(2)
 
-    def get_h0_matrix(self) -> np.ndarray:
+    def get_h0_matrix(self) -> sparse.csc_matrix:
         return self.frequency * (self.n_op + self.i_op / 2)
 
     def get_displacement_operator(self, value: float):
@@ -85,7 +85,7 @@ class Oscillator(SubSystem):
         :return: Displacement operator unitary matrix.
         """
         kz_op = value * (self.a_op + self.a_op_dag)
-        return expm(1j * kz_op)
+        return sparse.linalg.expm(1j * kz_op)
 
 
 class SpinFieldInteractionHamiltonian(Hamiltonian):
@@ -142,14 +142,12 @@ class SpinFieldInteractionHamiltonian(Hamiltonian):
             envelope = envelope.smoothen(field.pulse_front_width)
 
         self.add_interaction_term(
-            subsystems=[spin, vibration],
-            interaction=Interation([spin.sp, displacement_operator]),
+            interaction=Interation([spin, vibration], [spin.sp, displacement_operator]),
             envelope=envelope
         )
 
         self.add_interaction_term(
-            subsystems=[spin, vibration],
-            interaction=Interation([spin.sp.conj().T, displacement_operator.conj().T]),
+            interaction=Interation([spin, vibration], [spin.sp.conj().T, displacement_operator.conj().T]),
             envelope=envelope.conj()
         )
 

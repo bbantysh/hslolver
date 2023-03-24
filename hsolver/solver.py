@@ -9,11 +9,12 @@ from typing import List, Union, Optional
 from functools import cached_property
 
 import numpy as np
-from scipy.linalg import expm, fractional_matrix_power
+import scipy.sparse as sparse
+import scipy.sparse.linalg
 
 from hsolver.hamiltonian import Hamiltonian, HamiltonianTerm, SubSystem
 from hsolver.envelopes import get_common_period
-from hsolver.utils import ProgressPrinter, transform_sv_tensor, mkron
+from hsolver.utils import ProgressPrinter, transform_sv_tensor, mkron, sparse_sum
 
 
 class TimeInterval:
@@ -37,19 +38,19 @@ class TimeInterval:
         """Subsystems that are touched in the interval."""
         subsystems = []
         for term in self.terms:
-            for subsystem in term.subsystems:
+            for subsystem in term.interaction.subsystems:
                 if subsystem not in subsystems:
                     subsystems.append(subsystem)
         return subsystems
 
     @cached_property
-    def terms_full_matrices(self) -> List[np.ndarray]:
+    def terms_full_matrices(self) -> List[sparse.csc_matrix]:
         """Full matrices of each interval term."""
         matrices = []
         for term in self.terms:
             matrices_to_multiply = (
-                term.interaction.multipliers[term.subsystems.index(subsystem)]
-                if subsystem in term.subsystems else np.eye(subsystem.dim)
+                term.interaction.multipliers[term.interaction.subsystems.index(subsystem)]
+                if subsystem in term.interaction.subsystems else sparse.eye(subsystem.dim, format="csc")
                 for subsystem in self.subsystems
             )
             matrices.append(mkron(*matrices_to_multiply))
@@ -60,29 +61,29 @@ class TimeInterval:
         """Hamiltonian period within the interval."""
         return get_common_period([term.envelope for term in self.terms])
 
-    def get_hamiltonian(self, t: float) -> np.ndarray:
+    def get_hamiltonian(self, t: float) -> sparse.csc_matrix:
         """Get the interval hamiltonian matrix at specific time point.
 
         :param t: Time point.
         :return: Hamiltonian matrix.
         """
         assert self.time_start <= t < self.time_stop, "Wrong time point"
-        return np.sum([
+        return sparse_sum([
             term.envelope(t) * matrix
             for term, matrix in zip(self.terms, self.terms_full_matrices)
-        ], axis=0)
+        ])
 
-    def get_hamiltonian_derivative(self, t: float) -> np.ndarray:
+    def get_hamiltonian_derivative(self, t: float) -> sparse.csc_matrix:
         """Get the interval hamiltonian matrix derivative at specific time point.
 
         :param t: Time point.
         :return: Hamiltonian matrix.
         """
         assert self.time_start <= t < self.time_stop, "Wrong time point"
-        return np.sum([
+        return sparse_sum([
             term.envelope.drv(t) * matrix
             for term, matrix in zip(self.terms, self.terms_full_matrices)
-        ], axis=0)
+        ])
 
 
 class SystemEvolutionSolver:
@@ -205,8 +206,8 @@ class SystemEvolutionSolver:
             elif period is None:
                 step_title = "* Non periodic interval => use plain solving" if self.verbose else None
                 time_interval_modified = None
-                time_list_interval, state_list_interval, _ = \
-                    self.solve_for_interval(self._state_list[-1], time_interval, step_title)
+                time_list_interval, state_list_interval = \
+                    self.solve_for_interval(self._state_list[-1], time_interval, False, step_title)
 
             elif period == 0.:
                 self.print("* Constant hamiltonian => use unitary product")
@@ -214,7 +215,7 @@ class SystemEvolutionSolver:
                     t_start, min(t_start + self.max_step_size, t_stop), time_interval.terms
                 )
                 time_list_interval, state_list_interval, unitary_list_interval = \
-                    self.solve_for_interval(self._state_list[-1], time_interval_modified)
+                    self.solve_for_interval(self._state_list[-1], time_interval_modified, True)
 
             else:
                 self.print(f"* Periodic hamiltonian (period: {period:.4e}) => using Floquet method")
@@ -223,28 +224,30 @@ class SystemEvolutionSolver:
                     t_start, min(t_start + period, t_stop), time_interval.terms
                 )
                 time_list_interval, state_list_interval, unitary_list_interval = \
-                    self.solve_for_interval(self._state_list[-1], time_interval_modified, step_title)
+                    self.solve_for_interval(self._state_list[-1], time_interval_modified, True, step_title)
 
             if time_interval_modified is not None and time_list_interval[-1] < t_stop:
                 progress = ProgressPrinter(
                     min_value=t_start, max_value=t_stop, title="* Repeat unitary", verbose=self.verbose
                 )
 
-                transformation_dims = {
-                    self._hamiltonian.index(subsystem): subsystem.dim
-                    for subsystem in time_interval.subsystems
-                }
+                transformation_dims = [self._hamiltonian.index(subsystem) for subsystem in time_interval.subsystems]
                 time_current = time_list_interval[-1]
                 state_current = state_list_interval[-1]
                 dt_list_interval = np.diff([t_start] + time_list_interval)
                 while time_current < t_stop:
                     for dt, unitary in zip(dt_list_interval, unitary_list_interval):
                         if time_current + dt > t_stop:
-                            unitary = fractional_matrix_power(unitary, (t_stop - time_current) / dt)
-                            dt = t_stop - time_current
-
-                        state_current = transform_sv_tensor(state_current, unitary, transformation_dims)
-                        time_current += dt
+                            hamiltonian = time_interval.get_hamiltonian(time_current)
+                            state_current = transform_sv_tensor(
+                                state_current,
+                                transformation_dims,
+                                log_unitary=-1j * hamiltonian * (t_stop - time_current)
+                            )
+                            time_current = t_stop
+                        else:
+                            state_current = transform_sv_tensor(state_current, transformation_dims, unitary=unitary)
+                            time_current += dt
 
                         time_list_interval.append(time_current)
                         state_list_interval.append(state_current)
@@ -263,12 +266,19 @@ class SystemEvolutionSolver:
 
         return self
 
-    def solve_for_interval(self, init_state_tensor: np.ndarray, time_interval: TimeInterval, pp_title: str = None):
+    def solve_for_interval(
+            self,
+            init_state_tensor: np.ndarray,
+            time_interval: TimeInterval,
+            return_unitary: bool = False,
+            pp_title: str = None
+    ):
         """Solves the quantum state evolution within the time interval.
 
         :param init_state_tensor: Initial quantum state tensor at start of the interval.
         Tensor dimensions must be equal to `hamiltonian.dims`.
         :param time_interval: Evolution time interval.
+        :param return_unitary: Return unitary matrix for each time step.
         :param pp_title: Title of the progress printer.
         :return: List of time points, quantum states and unitary matrix at each time step.
         """
@@ -276,10 +286,7 @@ class SystemEvolutionSolver:
         state_list = []
         unitary_list = []
 
-        transformation_dims = {
-            self._hamiltonian.index(subsystem): subsystem.dim
-            for subsystem in time_interval.subsystems
-        }
+        transformation_dims = [self._hamiltonian.index(subsystem) for subsystem in time_interval.subsystems]
 
         time_current = time_interval.time_start
         state_current_tensor = init_state_tensor
@@ -298,12 +305,12 @@ class SystemEvolutionSolver:
                 dt = np.inf
             else:
                 # Amplitude should not be too high
-                hamiltonian_norm = np.linalg.norm(hamiltonian)
+                hamiltonian_norm = sparse.linalg.norm(hamiltonian)
                 dt_amplitude = \
                     self.HAMILTONIAN_MAX_AMPLITUDE / hamiltonian_norm if hamiltonian_norm > 0. else np.inf
 
                 # Time variation should not be too high
-                hamiltonian_derivative_norm = np.linalg.norm(time_interval.get_hamiltonian_derivative(time_current))
+                hamiltonian_derivative_norm = sparse.linalg.norm(time_interval.get_hamiltonian_derivative(time_current))
                 dt_derivative = \
                     self.HAMILTONIAN_MAX_VARIATION / hamiltonian_derivative_norm if hamiltonian_derivative_norm > 0. else np.inf
 
@@ -313,19 +320,31 @@ class SystemEvolutionSolver:
             dt = max(dt, self.min_step_size)
             dt = min(dt, time_interval.time_stop - time_current)
 
-            unitary = expm(-1j * hamiltonian * dt)
-            state_current_tensor = transform_sv_tensor(state_current_tensor, unitary, transformation_dims)
+            log_unitary = -1j * hamiltonian * dt
+            if return_unitary:
+                unitary = sparse.linalg.expm(log_unitary)
+                state_current_tensor = transform_sv_tensor(
+                    state_current_tensor, transformation_dims, unitary=unitary
+                )
+                unitary_list.append(unitary)
+            else:
+                # Calculate in a faster way if we do not need to store unitary
+                state_current_tensor = transform_sv_tensor(
+                    state_current_tensor, transformation_dims, log_unitary=log_unitary
+                )
 
             time_current += dt
             progress.update(time_current)
 
             time_list.append(time_current)
             state_list.append(state_current_tensor)
-            unitary_list.append(unitary)
 
         progress.stop()
 
-        return time_list, state_list, unitary_list
+        if return_unitary:
+            return time_list, state_list, unitary_list
+        else:
+            return time_list, state_list
 
     def get_subsystem_evolution(self, subsystems: List[SubSystem] = None):
         """Computes the list of subsystem density matrices at each time point.

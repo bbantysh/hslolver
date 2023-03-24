@@ -5,60 +5,81 @@ Author: Boris Bantysh
 E-mail: bbantysh60000@gmail.com
 License: GPL-3.0
 """
-from typing import List, Dict
+from typing import List
 
 import numpy as np
-
-
-def push_axes(tensor: np.ndarray, new_positions: List[int]) -> np.ndarray:
-    """Pushes first axes of the input tensor to specific positions
-
-    :param tensor: Input tensor
-    :param new_positions: New positions of first len(new_positions) axes
-    :return: Resulting tensor
-    """
-    axes = list(range(len(new_positions), tensor.ndim))
-    for idx_position in np.argsort(new_positions):
-        axes.insert(new_positions[idx_position], idx_position)
-    return tensor.transpose(axes)
+import scipy.sparse as sparse
+import scipy.sparse.linalg
 
 
 def transform_sv_tensor(
-        state_tensor: np.ndarray, unitary: np.ndarray, transformation_dims: Dict[int, int]
+        state_tensor: np.ndarray,
+        transformation_axes: List[int],
+        *,
+        unitary: sparse.csc_matrix = None,
+        log_unitary: sparse.csc_matrix = None
 ) -> np.ndarray:
-    """Transforms state-vector tensor with some unitary matrix
+    """Transforms state-vector tensor with some unitary matrix.
 
-    :param state_tensor: Input state-vector tensor
-    :param unitary: Unitary matrix
-    :param transformation_dims: Dimensions in which the matrix is acting
-    :return: Output state-vector tensor
+    Supports exp(A)*b fast multiplication if log_unitary is provided.
+
+    :param state_tensor: Input state-vector tensor.
+    :param transformation_axes: Axes to transform.
+    :param unitary: Unitary matrix.
+    :param log_unitary: Unitary logarithm.
+    :return: Output state-vector tensor.
     """
-    subsystems_indices = list(transformation_dims.keys())
-    subsystems_dims = list(transformation_dims.values())
-    subsystems_count = len(subsystems_indices)
+    n_axes = state_tensor.ndim
+    dims = state_tensor.shape
+    transformation_dims = [dims[axis] for axis in transformation_axes]
+    other_axes = list(set(list(range(n_axes))).difference(transformation_axes))
+    other_dims = [dims[axis] for axis in other_axes]
 
-    # transform tensor
-    state_tensor = np.tensordot(
-        unitary.reshape(2 * subsystems_dims),
-        state_tensor,
-        axes=(range(subsystems_count, 2 * subsystems_count), subsystems_indices)
-    )
+    # move convolution axes to beginning
+    state_tensor = np.moveaxis(state_tensor, transformation_axes, list(range(len(transformation_axes))))
 
-    # the convoluted axis are put in the beginning, so we need to bring them back
-    state_tensor = push_axes(state_tensor, subsystems_indices)
+    # reshape to matrix
+    state_tensor = np.reshape(state_tensor, (np.prod(transformation_dims), np.prod(other_dims, dtype=int)))
+
+    # transform matrix
+    if unitary is not None:
+        state_tensor = unitary @ state_tensor
+    elif log_unitary is not None:
+        state_tensor = sparse.linalg.expm_multiply(log_unitary, state_tensor)
+    else:
+        RuntimeError("Please specify either unitary or log_unitary argument")
+
+    # reshape back to tensor
+    state_tensor = np.reshape(state_tensor, transformation_dims + other_dims)
+
+    # bring axes back
+    state_tensor = np.moveaxis(state_tensor, list(range(len(transformation_axes))), transformation_axes)
 
     return state_tensor
 
 
-def mkron(*matrices) -> np.ndarray:
-    """Performs multiple matrices Kroneker product
+def mkron(*matrices, is_sparse: bool = True):
+    """Performs multiple matrices Kronecker product
 
     :param matrices: Input matrices
+    :param is_sparse: Use sparse matrices
     :return: Resulting matrix
     """
-    matrix = np.eye(1)
+    matrix = sparse.eye(1, format="csc") if is_sparse else np.eye(1)
     for m in matrices:
-        matrix = np.kron(matrix, m)
+        matrix = sparse.kron(matrix, m, format="csc") if is_sparse else np.kron(matrix, m)
+    return matrix
+
+
+def sparse_sum(matrices: List[sparse.csc_matrix]) -> sparse.csc_matrix:
+    """Returns the sum if several sparse matrices
+
+    :param matrices: Input matrices
+    :return: Sum of input matrices
+    """
+    matrix = matrices[0]
+    for m in matrices[1:]:
+        matrix += m
     return matrix
 
 
