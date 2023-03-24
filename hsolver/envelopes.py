@@ -5,6 +5,7 @@ Author: Boris Bantysh
 E-mail: bbantysh60000@gmail.com
 License: GPL-3.0
 """
+from warnings import warn
 from abc import ABC, abstractmethod
 from typing import Optional, Callable, List
 from fractions import Fraction
@@ -427,5 +428,7 @@ def get_common_period(envelopes: List[Envelope]) -> Optional[float]:
             t0 = envelope.time_stop - period
         else:
             t0 = 0.
-        assert abs(envelope(t0 + period) - envelope(t0)) < 1e-9, "Error approximating envelope period"
+        if abs(envelope(t0 + period) - envelope(t0)) > 1e-6:
+            warn("Failed to approximate envelope period. Use non-periodic evolution.")
+            return None
     return period
