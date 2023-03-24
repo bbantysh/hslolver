@@ -1,10 +1,17 @@
-"""Module for working with hamiltonian"""
+"""
+Module for working with hamiltonians.
+
+Author: Boris Bantysh
+E-mail: bbantysh60000@gmail.com
+License: GPL-3.0
+"""
 from abc import ABC, abstractmethod
 from functools import cached_property
 from typing import NamedTuple, List
+from collections import defaultdict
 
 import numpy as np
-from scipy.linalg import expm
+import scipy.sparse as sparse
 
 from hsolver.envelopes import Envelope, ConstantEnvelope, SumEnvelope
 
@@ -15,8 +22,16 @@ class SubSystem(ABC):
     :param dim: Subsystem dimension
     """
 
-    def __init__(self, dim: int):
+    __names_collections = defaultdict(lambda: 0)
+
+    def __init__(self, dim: int, name: str = None):
         self._dim = dim
+
+        if name is None:
+            class_name = self.__class__.__name__
+            self.__names_collections[class_name] += 1
+            name = class_name + str(self.__names_collections[class_name])
+        self.name = name
 
     @property
     def dim(self) -> int:
@@ -24,9 +39,9 @@ class SubSystem(ABC):
         return self._dim
 
     @cached_property
-    def i_op(self) -> np.ndarray:
+    def i_op(self) -> sparse.csc_matrix:
         """Subsystem identity operator"""
-        return np.eye(self.dim)
+        return sparse.eye(self.dim, format="csc")
 
     def basis_state(self, jb: int) -> np.ndarray:
         """Returns the vector of the subsystem basis state
@@ -37,41 +52,38 @@ class SubSystem(ABC):
         return np.eye(1, self.dim, jb).reshape((-1,))
 
     @abstractmethod
-    def get_h0_matrix(self) -> np.ndarray:
+    def get_h0_matrix(self) -> sparse.csc_matrix:
         """Returns the H0 hamiltonian matrix"""
         pass
+
+    def __repr__(self):
+        return self.name
 
 
 class Interation:
     """Class for subsystems interaction
+    TODO: Make it possible to define analytical exponentiation
 
     :param multipliers: List of matrices corresponding to interaction hamiltonian
     """
 
-    def __init__(self, multipliers: List[np.ndarray]):
+    def __init__(self, subsystems: List[SubSystem], multipliers: List[sparse.csc_matrix]):
+        assert len(subsystems) == len(multipliers), "Invalid number of multipliers"
+        self.subsystems = subsystems
         self.multipliers = multipliers
 
     @cached_property
-    def matrix(self) -> np.ndarray:
+    def matrix(self) -> sparse.csc_matrix:
         """Tensor product of the multipliers"""
         matrix = self.multipliers[0]
         if len(self.multipliers) == 1:
             return matrix
         for matrix_j in self.multipliers[1:]:
-            matrix = np.kron(matrix, matrix_j)
+            matrix = sparse.kron(matrix, matrix_j)
         return matrix
-
-    def get_unitary(self, strength: float) -> np.ndarray:
-        """Returns the unitary matrix corresponding to interaction
-
-        :param strength: Interaction strength
-        :return: Unitary matrix
-        """
-        return expm(-1j * self.matrix * strength)
 
 
 class HamiltonianTerm(NamedTuple):
-    subsystems: List[SubSystem]
     interaction: Interation
     envelope: Envelope
 
@@ -142,7 +154,7 @@ class Hamiltonian:
         if subsystems is None:
             subsystems = self.subsystems
         self._h0_terms = [
-            HamiltonianTerm([subsystem], Interation([subsystem.get_h0_matrix()]), ConstantEnvelope(1.))
+            HamiltonianTerm(Interation([subsystem], [subsystem.get_h0_matrix()]), ConstantEnvelope(1.))
             for subsystem in subsystems
         ]
         return self
@@ -151,16 +163,17 @@ class Hamiltonian:
         """Disables H0 terms"""
         return self.use_h0([])
 
-    def add_interaction_term(self, subsystems: List[SubSystem], interaction: Interation, envelope: Envelope):
+    def add_interaction_term(self, interaction: Interation, envelope: Envelope):
         """Adds interaction term to the hamiltonian
 
-        :param subsystems: List of subsystems for which the term is acting
         :param interaction: Interaction instance
         :param envelope: Term envelope
         """
+        for subsystem in interaction.subsystems:
+            assert subsystem in self.subsystems, f"Hamiltonian doesnt work with subsystem {subsystem.name}"
         envelopes = envelope.expand() if isinstance(envelope, SumEnvelope) else [envelope]
         for envelope in envelopes:
-            self._interaction_terms.append(HamiltonianTerm(subsystems, interaction, envelope))
+            self._interaction_terms.append(HamiltonianTerm(interaction, envelope))
         return self
 
     def factorized_state(self, states: List[np.ndarray]) -> np.ndarray:

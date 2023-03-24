@@ -7,15 +7,15 @@ def read(filename: str):
 
 
 setup(
-    name='hsolver',
-    version='0.1',
-    author='Boris Bantysh',
-    author_email='bbantysh60000@gmail.com',
-    description='The tool for solving quantum state evolution under periodic hamiltonian',
-    license='GPL-3.0',
-    keywords='periodic hamiltonian',
-    url='https://github.com/bbantysh/hsolver',
-    packages=['hsolver'],
-    long_description=read('README.md'),
-    install_requires=['numpy', 'scipy']
+    name="hsolver",
+    version="0.3",
+    author="Boris Bantysh",
+    author_email="bbantysh60000@gmail.com",
+    description="The tool for solving quantum state evolution under periodic hamiltonian",
+    license="GPL-3.0",
+    keywords="periodic hamiltonian",
+    url="https://github.com/bbantysh/hsolver",
+    packages=["hsolver"],
+    long_description=read("README.md"),
+    install_requires=["numpy", "scipy", "pytest"]
 )
