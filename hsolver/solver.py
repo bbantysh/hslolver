@@ -7,6 +7,7 @@ License: GPL-3.0
 """
 from typing import List, Union, Optional
 from functools import cached_property
+from time import time
 
 import numpy as np
 import scipy.sparse as sparse
@@ -14,7 +15,7 @@ import scipy.sparse.linalg
 
 from hsolver.hamiltonian import Hamiltonian, HamiltonianTerm, SubSystem
 from hsolver.envelopes import get_common_period
-from hsolver.utils import ProgressPrinter, transform_sv_tensor, mkron, sparse_sum
+from hsolver.utils import ProgressPrinter, transform_sv_tensor, mkron, sparse_sum, is_dm, purify, format_bytes
 
 
 class TimeInterval:
@@ -42,6 +43,13 @@ class TimeInterval:
                 if subsystem not in subsystems:
                     subsystems.append(subsystem)
         return subsystems
+
+    @cached_property
+    def dim(self) -> int:
+        dim = 1
+        for subsystem in self.subsystems:
+            dim *= subsystem.dim
+        return dim
 
     @cached_property
     def terms_full_matrices(self) -> List[sparse.csc_matrix]:
@@ -115,9 +123,7 @@ class SystemEvolutionSolver:
         self._time_list = None
         self._state_list = None
 
-        if type(init_state) is list:
-            init_state = self._hamiltonian.factorized_state(init_state)
-        self.init_state = init_state.astype(complex)
+        self.init_state = init_state
 
     @property
     def hamiltonian(self) -> Hamiltonian:
@@ -180,6 +186,17 @@ class SystemEvolutionSolver:
 
         return time_intervals
 
+    def _prepare_init_state(self) -> np.ndarray:
+        if type(self.init_state) is list:
+            init_state = self._hamiltonian.factorized_state([
+                purify(state) if is_dm(state) else state.reshape([-1, 1])
+                for state in self.init_state
+            ])
+        else:
+            state = self.init_state.copy()
+            init_state = purify(state) if is_dm(state) else state.reshape([-1, 1])
+        return init_state.astype(complex).reshape(self._hamiltonian.dims + [init_state.shape[1]])
+
     def solve(self, time_stop: float, time_start: float = 0.):
         """Solves the quantum state evolution.
 
@@ -187,6 +204,9 @@ class SystemEvolutionSolver:
         :param time_start: Evolution start time (`0.` by default).
         """
         state = self.init_state.copy().reshape(self._hamiltonian.dims)
+        state = self._prepare_init_state()
+        self.print(f"* State tensor dimensions: {list(state.shape)} ({format_bytes(state.nbytes)})")
+
         time_intervals = self.search_time_intervals(time_start, time_stop)
 
         self._time_list = [time_start]
@@ -260,9 +280,13 @@ class SystemEvolutionSolver:
 
             # Double check
             assert time_list_interval[-1] == t_stop, "Something went wrong"
+            self.print(f"* Solved in {time() - solver_interval_time_start:.1f} sec.")
 
             self._time_list += time_list_interval
             self._state_list += state_list_interval
+
+        self.print("============================")
+        self.print(f"* Total time elapsed {time() - solver_time_start:.1f} sec.")
 
         return self
 
@@ -355,7 +379,7 @@ class SystemEvolutionSolver:
         assert self.state_list is not None
         if subsystems is None:
             subsystems = self._hamiltonian.subsystems
-        return [self._hamiltonian.subsystem_dm(state.flatten(), subsystems) for state in self.state_list]
+        return [self._hamiltonian.subsystem_dm(subsystems, state) for state in self.state_list]
 
     def get_populations_evolution(self, subsystems: List[SubSystem] = None):
         """Computes the time evolution of each subsystem basis state population.

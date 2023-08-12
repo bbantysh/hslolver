@@ -45,25 +45,40 @@ class Oscillator(SubSystem):
     def __init__(self, dim: int, frequency: float, offset: int = 0):
         super(Oscillator, self).__init__(dim)
         self.frequency = frequency
-        self.offset = offset
+        self._offset = offset
 
     def basis_state(self, jb: int) -> np.ndarray:
-        return super(Oscillator, self).basis_state(jb - self.offset)
+        return super(Oscillator, self).basis_state(jb - self._offset)
+
+    def thermal_state(self, mean_excitations: float) -> np.ndarray:
+        assert self._offset == 0, "Non-zero offset works bad for thermal states"
+        nm = mean_excitations
+        if nm <= 0.:
+            pn = np.zeros(self.n.shape)
+            pn[0] = 1.
+        else:
+            pn = np.exp(self.n * np.log(nm) - (self.n + 1) * np.log(nm + 1))
+            pn /= pn.sum()
+        return np.diag(pn)
+
+    @cached_property
+    def n(self) -> np.ndarray:
+        return np.arange(self._offset, self._offset + self.dim)
 
     @cached_property
     def a_op(self) -> sparse.csc_matrix:
         """Creation operator"""
-        return sparse.csc_matrix(np.diag(np.sqrt(np.arange(1, self.offset + self.dim)), 1)[self.offset:, self.offset:])
+        return sparse.csc_matrix(np.diag(np.sqrt(np.arange(1, self._offset + self.dim)), 1)[self._offset:, self._offset:])
 
     @cached_property
     def a_op_dag(self) -> sparse.csc_matrix:
         """Annihilation operator"""
-        return sparse.csc_matrix(np.diag(np.sqrt(np.arange(1, self.offset + self.dim)), -1)[self.offset:, self.offset:])
+        return sparse.csc_matrix(np.diag(np.sqrt(np.arange(1, self._offset + self.dim)), -1)[self._offset:, self._offset:])
 
     @cached_property
     def n_op(self) -> sparse.csc_matrix:
         """Excitation number operator"""
-        return sparse.csc_matrix(np.diag(np.arange(0, self.offset + self.dim))[self.offset:, self.offset:])
+        return sparse.csc_matrix(np.diag(self.n))
 
     @cached_property
     def x_op(self) -> sparse.csc_matrix:
@@ -77,6 +92,9 @@ class Oscillator(SubSystem):
 
     def get_h0_matrix(self) -> sparse.csc_matrix:
         return self.frequency * (self.n_op + self.i_op / 2)
+
+    def get_h0_string(self) -> str:
+        return f"{self.frequency} * (n + 1/2)"
 
     def get_displacement_operator(self, value: float):
         """Returns the displacement operator
@@ -115,7 +133,7 @@ class SpinFieldInteractionHamiltonian(Hamiltonian):
     class InteractionParameters(NamedTuple):
         """Spin-field interaction parameters.
 
-        :param rabi_frequency. Rabi frequency.
+        :param rabi_frequency: Rabi frequency.
         :param ld_param: Lamb Dicke parameter.
         """
         rabi_frequency: float

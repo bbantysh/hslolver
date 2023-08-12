@@ -4,7 +4,7 @@ import scipy.sparse as sparse
 from scipy.linalg import expm
 import numpy as np
 
-from hsolver.utils import transform_sv_tensor, mkron
+from hsolver.utils import transform_sv_tensor, mkron, is_dm, purify
 
 
 def random_matrix(dim: int, is_sparse: bool = True):
@@ -108,3 +108,59 @@ class TestMKron:
         m2 = mkron(matrices[0], matrices[1], matrices[2], is_sparse=False)
         assert isinstance(m2, np.ndarray)
         assert np.allclose(m1, m2)
+
+
+class TestIsDM:
+
+    def test_true_dm_pure_state(self):
+        d = 5
+        c = np.random.randn(d) + 1j * np.random.randn(d)
+        c /= np.linalg.norm(c)
+        dm = np.outer(c, c.conj())
+        assert is_dm(dm)
+
+    def test_true_dm_fully_mixed(self):
+        d = 5
+        c = np.random.randn(d, d) + 1j * np.random.randn(d, d)
+        dm = c @ c.conj().T / np.trace(c.conj().T @ c)
+        assert is_dm(dm)
+
+    def test_not_square_matrix(self):
+        d, rank = 5, 3
+        c = np.random.randn(d, rank) + 1j * np.random.randn(d, rank)
+        dm = c / np.sqrt(np.trace(c.conj().T @ c))
+        assert not is_dm(dm)
+
+    def test_not_unit_trace(self):
+        d = 5
+        c = np.random.randn(d, d) + 1j * np.random.randn(d, d)
+        dm = c @ c.conj().T
+        assert not is_dm(dm)
+
+    def test_not_hermitian(self):
+        d = 5
+        dm = np.random.randn(d, d) + 1j * np.random.randn(d, d)
+        assert not is_dm(dm)
+
+    def test_assert_not_positive(self):
+        d = 5
+        a = np.random.randn(d, d) + 1j * np.random.randn(d, d)
+        dm = a + a.conj().T
+        dm /= np.trace(dm)
+        assert not is_dm(dm)
+
+
+class TestPurify:
+
+    @staticmethod
+    def generate_dm(d: int, rank: int) -> np.ndarray:
+        c = np.random.randn(d, rank) + 1j * np.random.randn(d, rank)
+        return c @ c.conj().T / np.trace(c.conj().T @ c)
+
+    @pytest.mark.parametrize(["d", "rank"], [(3, 1), (3, 2), (3, 3), (5, 1), (5, 2)])
+    def test_purify(self, d: int, rank: int):
+        dm = self.generate_dm(d, rank)
+        c = purify(dm)
+        assert list(c.shape) == [d, rank]
+        dm_from_c = c @ c.conj().T
+        assert np.allclose(dm, dm_from_c)

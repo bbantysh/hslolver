@@ -58,6 +58,44 @@ def transform_sv_tensor(
     return state_tensor
 
 
+def is_dm(a: np.ndarray) -> bool:
+    """Checks whether the input matrix is a density matrix,
+    i.e. positive semi-defined matrix with unit trace.
+
+    :param a: Input matrix
+    :return: True if input matrix is a density matrix.
+    """
+    d = a.shape[0]
+    if list(a.shape) != [d, d]:
+        return False
+    if not np.isclose(np.trace(a), 1.):
+        return False
+    if not np.allclose(a, a.conj().T):
+        return False
+    if not np.all(np.linalg.eigvalsh(a) > -1e-10):
+        return False
+    return True
+
+
+def purify(dm: np.ndarray, tol: float = 1e-4) -> np.ndarray:
+    """Purifies the density matrix D.
+    It searches for the matrix A with minimal number of columns (up to `tol`),
+    such that D = AA^+.
+
+    :param dm: Input density matrix.
+    :param tol: Purification tolerance.
+    :return: Purified matrix.
+    """
+    assert is_dm(dm), "Input is not a valid density matrix"
+    w, u = np.linalg.eigh(dm)
+    w, u = np.flip(w), np.fliplr(u)  # Set descending order of eigenvalues
+    idx_stop = np.where(w < tol)[0]
+    if len(idx_stop) > 0:
+        idx_stop = idx_stop[0]
+        u, w = u[:, :idx_stop], w[:idx_stop]
+    return u * np.sqrt(w)
+
+
 def mkron(*matrices, is_sparse: bool = True):
     """Performs multiple matrices Kronecker product
 
@@ -81,6 +119,17 @@ def sparse_sum(matrices: List[sparse.csc_matrix]) -> sparse.csc_matrix:
     for m in matrices[1:]:
         matrix += m
     return matrix
+
+
+def format_bytes(size: int) -> str:
+    # https://stackoverflow.com/a/49361727/1883233
+    power = 1 << 10
+    n = 0
+    power_labels = {0: "B", 1: "KB", 2: "MB", 3: "GB", 4: "TB"}
+    while size > power:
+        size /= power
+        n += 1
+    return f"{size:.1f} {power_labels[n]}"
 
 
 class ProgressPrinter:

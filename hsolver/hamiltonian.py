@@ -179,8 +179,8 @@ class Hamiltonian:
     def factorized_state(self, states: List[np.ndarray]) -> np.ndarray:
         """Generates the factorized state of the system
 
-        :param states: List of subsystem states
-        :return: Factorized state of the whole system
+        :param states: List of subsystem states (vector-states or density matrices).
+        :return: Purified factorized state of the whole system
         """
         num_subsystems = len(self.subsystems)
         assert len(states) == num_subsystems
@@ -189,29 +189,26 @@ class Hamiltonian:
             state = np.kron(state, state_j)
         return state
 
-    def subsystem_dm(self, state: np.ndarray, subsystems: List[SubSystem]) -> np.ndarray:
+    def subsystem_dm(self, subsystems: List[SubSystem], state: np.ndarray) -> np.ndarray:
         """Computes the subsystems density matrix by partial trace.
 
-        :param state: Input vector-state of the whole system.
         :param subsystems: List of subsystems.
+        :param state: Input vector-state of the whole system, or its purified density matrix.
         :return: Subsystems' density matrix.
         """
         num_subsystems = len(self.subsystems)
+        if state.ndim == 1 or state.ndim == num_subsystems:  # Pure state
+            state = state.reshape(self.dims + [1])
+        else:  # Mixed state
+            state = state.reshape(self.dims + [state.shape[-1]])
 
-        axes_a = [self.index(subsystem) for subsystem in subsystems]
-        axes_a_conj = [j + num_subsystems for j in axes_a]
-        dim_a = int(np.prod([self.subsystems[j].dim for j in axes_a]))
+        # Put the axes to remain in the beginning of the tensor and reshape it to d1xd2 matrix.
+        # The second dimension corresponds to the subsystems that should be traced out.
+        axes_remain = [self.index(subsystem) for subsystem in subsystems]
+        dim_remain = np.prod([subsystem.dim for subsystem in subsystems])
+        state = np.moveaxis(state, axes_remain, range(len(axes_remain))).reshape([dim_remain, -1])
 
-        axes_b = list(set(list(range(num_subsystems))).difference(axes_a))
-        axes_b_conj = [j + num_subsystems for j in axes_b]
-        dim_b = int(np.prod([self.subsystems[j].dim for j in axes_b]))
-
-        dm = np.outer(state, state.conj()) \
-            .reshape(self.dims + self.dims) \
-            .transpose(axes_a + axes_b + axes_a_conj + axes_b_conj) \
-            .reshape([dim_a, dim_b, dim_a, dim_b])
-
-        return np.trace(dm, axis1=1, axis2=3)
+        return state @ state.conj().T
 
     def add(self, other):
         """Adds other hamiltonian.
