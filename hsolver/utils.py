@@ -6,6 +6,7 @@ E-mail: bbantysh60000@gmail.com
 License: GPL-3.0
 """
 from typing import List
+from time import time
 
 import numpy as np
 import scipy.sparse as sparse
@@ -149,6 +150,7 @@ class ProgressPrinter:
 
         self.current_progress = 0
         self.num_steps = 0
+        self.time_start = time()
         self.print(new_line=False)
 
     def print(self, new_line: bool):
@@ -174,7 +176,7 @@ class ProgressPrinter:
 
         :return: Line to print
         """
-        return f"{self.title}: {self.current_progress}% ({self.num_steps} steps)"
+        return f"{self.title}: {self.current_progress}% ({self.num_steps} steps, {time() - self.time_start:.1f} sec.)"
 
     def update(self, value: float):
         """Updates the progress with new iterator value

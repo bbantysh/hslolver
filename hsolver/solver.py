@@ -113,11 +113,13 @@ class SystemEvolutionSolver:
             init_state: Union[List[np.ndarray], np.ndarray],
             max_step_size: float,
             min_step_size: float = 0.,
+            min_step_size_save: float = None,
             verbose: bool = True,
     ):
         self._hamiltonian = hamiltonian
         self.max_step_size = max_step_size
         self.min_step_size = min_step_size
+        self.min_step_size_save = min_step_size if min_step_size_save is None else min_step_size_save
         self.verbose = verbose
 
         self._time_list = None
@@ -203,16 +205,19 @@ class SystemEvolutionSolver:
         :param time_stop: Evolution stop time.
         :param time_start: Evolution start time (`0.` by default).
         """
-        state = self.init_state.copy().reshape(self._hamiltonian.dims)
+        self.print("===> STARTING SOLVER")
+        solver_time_start = time()
         state = self._prepare_init_state()
         self.print(f"* State tensor dimensions: {list(state.shape)} ({format_bytes(state.nbytes)})")
 
+        self.print("* Searching for evolution time intervals")
         time_intervals = self.search_time_intervals(time_start, time_stop)
 
         self._time_list = [time_start]
         self._state_list = [state]
         for idx_time_interval, time_interval in enumerate(time_intervals):
             self.print(f"===> TIME INTERVAL {idx_time_interval + 1}/{len(time_intervals)}")
+            solver_interval_time_start = time()
 
             t_start, t_stop, period = time_interval.time_start, time_interval.time_stop, time_interval.period
             self.print(f"* t_start = {t_start:.4e}, t_stop = {t_stop:.4e}")
@@ -248,7 +253,7 @@ class SystemEvolutionSolver:
 
             if time_interval_modified is not None and time_list_interval[-1] < t_stop:
                 progress = ProgressPrinter(
-                    min_value=t_start, max_value=t_stop, title="* Repeat unitary", verbose=self.verbose
+                    min_value=t_start, max_value=t_stop, title="* Repeating unitary", verbose=self.verbose
                 )
 
                 transformation_dims = [self._hamiltonian.index(subsystem) for subsystem in time_interval.subsystems]
@@ -312,6 +317,8 @@ class SystemEvolutionSolver:
 
         transformation_dims = [self._hamiltonian.index(subsystem) for subsystem in time_interval.subsystems]
 
+        last_save_point = time_interval.time_start
+        save_unitary = sparse.eye(time_interval.dim, format="csc")
         time_current = time_interval.time_start
         state_current_tensor = init_state_tensor
         progress = ProgressPrinter(
@@ -331,12 +338,16 @@ class SystemEvolutionSolver:
                 # Amplitude should not be too high
                 hamiltonian_norm = sparse.linalg.norm(hamiltonian)
                 dt_amplitude = \
-                    self.HAMILTONIAN_MAX_AMPLITUDE / hamiltonian_norm if hamiltonian_norm > 0. else np.inf
+                    self.HAMILTONIAN_MAX_AMPLITUDE / hamiltonian_norm \
+                    if hamiltonian_norm > 0. \
+                    else np.inf
 
                 # Time variation should not be too high
                 hamiltonian_derivative_norm = sparse.linalg.norm(time_interval.get_hamiltonian_derivative(time_current))
                 dt_derivative = \
-                    self.HAMILTONIAN_MAX_VARIATION / hamiltonian_derivative_norm if hamiltonian_derivative_norm > 0. else np.inf
+                    self.HAMILTONIAN_MAX_VARIATION / hamiltonian_derivative_norm \
+                    if hamiltonian_derivative_norm > 0. \
+                    else np.inf
 
                 dt = min(dt_amplitude, dt_derivative)
 
@@ -350,7 +361,7 @@ class SystemEvolutionSolver:
                 state_current_tensor = transform_sv_tensor(
                     state_current_tensor, transformation_dims, unitary=unitary
                 )
-                unitary_list.append(unitary)
+                save_unitary = unitary @ save_unitary
             else:
                 # Calculate in a faster way if we do not need to store unitary
                 state_current_tensor = transform_sv_tensor(
@@ -360,8 +371,13 @@ class SystemEvolutionSolver:
             time_current += dt
             progress.update(time_current)
 
-            time_list.append(time_current)
-            state_list.append(state_current_tensor)
+            if time_current - last_save_point >= self.min_step_size_save or time_current == time_interval.time_stop:
+                time_list.append(time_current)
+                state_list.append(state_current_tensor)
+                if return_unitary:
+                    unitary_list.append(save_unitary)
+                    save_unitary = sparse.eye(time_interval.dim, format="csc")
+                last_save_point = time_current
 
         progress.stop()
 
