@@ -23,7 +23,8 @@ from hsolver.utils import (
     is_dm,
     purify,
     format_bytes,
-    format_time
+    format_time,
+    sparse_expm
 )
 
 
@@ -370,7 +371,7 @@ class SystemEvolutionSolver:
 
             log_unitary = -1j * hamiltonian * dt
             if return_unitary:
-                unitary = sparse.linalg.expm(log_unitary)
+                unitary = sparse_expm(log_unitary)
                 state_current_tensor = transform_sv_tensor(
                     state_current_tensor, transformation_dims, unitary=unitary
                 )

@@ -122,6 +122,21 @@ def sparse_sum(matrices: List[sparse.csc_matrix]) -> sparse.csc_matrix:
     return matrix
 
 
+def sparse_expm(matrix: sparse.csc_matrix) -> sparse.csc_matrix:
+    """Computes the matrix exponential exp(A)
+
+    :param matrix: Input matrix A
+    :return: Output matrix
+    """
+    r, c = matrix.nonzero()
+    if np.all(r == c):  # Diagonal matrix
+        u = matrix.copy()
+        np.exp(matrix.data, out=u.data)
+    else:
+        u = sparse.linalg.expm(matrix)
+    return u
+
+
 def format_bytes(size: int) -> str:
     # https://stackoverflow.com/a/49361727/1883233
     power = 1 << 10
