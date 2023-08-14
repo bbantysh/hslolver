@@ -72,6 +72,9 @@ class Envelope(ABC):
         """Returns the complex conjugate envelope"""
         return ConjugateEnvelope(self)
 
+    def to_string(self) -> str:
+        return "E(t)"
+
 
 class ConjugateEnvelope(Envelope):
     """Complex conjugate envelope.
@@ -105,6 +108,9 @@ class ConjugateEnvelope(Envelope):
     def conj(self):
         return self.__parent_envelope
 
+    def to_string(self) -> str:
+        return f"conj[{self.__parent_envelope.to_string()}]"
+
 
 class ConstantEnvelope(Envelope):
     """Constant value envelope.
@@ -131,6 +137,9 @@ class ConstantEnvelope(Envelope):
         :return: New envelope with smooth bounds.
         """
         return PulseEnvelope(front_width, self.value, self.time_start, self.time_stop)
+
+    def to_string(self) -> str:
+        return str(self.value)
 
 
 class CustomEnvelope(Envelope):
@@ -204,6 +213,9 @@ class ProductEnvelope(Envelope):
             drv += m1 * envelope.drv(t)
         return drv
 
+    def to_string(self) -> str:
+        return "·".join([envelope.to_string() for envelope in self.multipliers])
+
 
 class SumEnvelope(Envelope):
     """The sum of multiple envelopes.
@@ -251,6 +263,9 @@ class SumEnvelope(Envelope):
         :return: List of terms.
         """
         return self.terms
+
+    def to_string(self) -> str:
+        return "+".join([envelope.to_string() for envelope in self.terms])
 
 
 class PulseEnvelope(SumEnvelope):
@@ -396,6 +411,28 @@ class PeriodicEnvelope(Envelope):
             ProductEnvelope([self.to_window(term.time_start, term.time_stop), term])
             for term in pulse_envelope.terms
         ])
+
+    def to_string(self) -> str:
+        if self.frequency > 0.:
+            if self.phase > 0.:
+                string = f"-i·[{self.frequency}t-{self.phase}]"
+            elif self.phase < 0.:
+                string = f"-i·[{self.frequency}t+{-self.phase}]"
+            else:
+                string = f"-i·{self.frequency}t"
+        else:
+            if self.phase > 0.:
+                string = f"i·[{-self.frequency}t+{self.phase}]"
+            elif self.phase < 0.:
+                string = f"i·[{-self.frequency}t-{self.phase}]"
+            else:
+                string = f"i·{-self.frequency}t"
+        string = f"exp({string})"
+        if self.amplitude != 1.:
+            string = f"{self.amplitude}·{string}"
+        if self.shift != 0.:
+            string = f"[{self.shift}+{string}]"
+        return string
 
 
 def get_common_period(envelopes: List[Envelope]) -> Optional[float]:

@@ -5,7 +5,7 @@ Author: Boris Bantysh
 E-mail: bbantysh60000@gmail.com
 License: GPL-3.0
 """
-from typing import List, Union, Optional
+from typing import List, Union, Optional, Tuple
 from functools import cached_property
 from time import time
 
@@ -14,7 +14,7 @@ import scipy.sparse as sparse
 import scipy.sparse.linalg
 
 from hsolver.hamiltonian import Hamiltonian, HamiltonianTerm, SubSystem
-from hsolver.envelopes import get_common_period
+from hsolver.envelopes import Envelope, get_common_period
 from hsolver.utils import ProgressPrinter, transform_sv_tensor, mkron, sparse_sum, is_dm, purify, format_bytes
 
 
@@ -39,7 +39,7 @@ class TimeInterval:
         """Subsystems that are touched in the interval."""
         subsystems = []
         for term in self.terms:
-            for subsystem in term.interaction.subsystems:
+            for subsystem in term.operator.subsystems:
                 if subsystem not in subsystems:
                     subsystems.append(subsystem)
         return subsystems
@@ -52,16 +52,20 @@ class TimeInterval:
         return dim
 
     @cached_property
-    def terms_full_matrices(self) -> List[sparse.csc_matrix]:
+    def terms_full_matrices_and_envelopes(self) -> List[Tuple[sparse.csc_matrix, Envelope]]:
         """Full matrices of each interval term."""
         matrices = []
         for term in self.terms:
             matrices_to_multiply = (
-                term.interaction.multipliers[term.interaction.subsystems.index(subsystem)]
-                if subsystem in term.interaction.subsystems else sparse.eye(subsystem.dim, format="csc")
+                term.operator.multipliers[term.operator.subsystems.index(subsystem)]
+                if subsystem in term.operator.subsystems
+                else sparse.eye(subsystem.dim, format="csc")
                 for subsystem in self.subsystems
             )
-            matrices.append(mkron(*matrices_to_multiply))
+            matrix = mkron(*matrices_to_multiply)
+            matrices.append((matrix, term.envelope))
+            if term.use_hc:
+                matrices.append((matrix.conj().T, term.envelope.conj()))
         return matrices
 
     @cached_property
@@ -77,8 +81,8 @@ class TimeInterval:
         """
         assert self.time_start <= t < self.time_stop, "Wrong time point"
         return sparse_sum([
-            term.envelope(t) * matrix
-            for term, matrix in zip(self.terms, self.terms_full_matrices)
+            envelope(t) * matrix
+            for matrix, envelope in self.terms_full_matrices_and_envelopes
         ])
 
     def get_hamiltonian_derivative(self, t: float) -> sparse.csc_matrix:
@@ -89,8 +93,8 @@ class TimeInterval:
         """
         assert self.time_start <= t < self.time_stop, "Wrong time point"
         return sparse_sum([
-            term.envelope.drv(t) * matrix
-            for term, matrix in zip(self.terms, self.terms_full_matrices)
+            envelope.drv(t) * matrix
+            for matrix, envelope in self.terms_full_matrices_and_envelopes
         ])
 
 

@@ -56,25 +56,37 @@ class SubSystem(ABC):
         """Returns the H0 hamiltonian matrix"""
         pass
 
+    def get_h0_string(self) -> str:
+        """Returns string representation of H0"""
+        return str(self.get_h0_matrix())
+
     def __repr__(self):
         return self.name
 
 
-class Interation:
-    """Class for subsystems interaction
-    TODO: Make it possible to define analytical exponentiation
+class Operator:
+    """Class for time-independent subsystems operator
 
+    :param subsystems: List of interacting subsystems
     :param multipliers: List of matrices corresponding to interaction hamiltonian
+    :param multipliers_strings: List of string representation of each multiplier
     """
 
-    def __init__(self, subsystems: List[SubSystem], multipliers: List[sparse.csc_matrix]):
+    def __init__(
+            self,
+            subsystems: List[SubSystem],
+            multipliers: List[sparse.csc_matrix],
+            multipliers_strings: List[str] = None
+    ):
         assert len(subsystems) == len(multipliers), "Invalid number of multipliers"
+        for subsystem, multiplier in zip(subsystems, multipliers):
+            assert list(multiplier.shape) == [subsystem.dim] * 2, "Invalid multiplier dimension"
         self.subsystems = subsystems
         self.multipliers = multipliers
+        self._multipliers_strings = multipliers_strings
 
     @cached_property
     def matrix(self) -> sparse.csc_matrix:
-        """Tensor product of the multipliers"""
         matrix = self.multipliers[0]
         if len(self.multipliers) == 1:
             return matrix
@@ -82,10 +94,17 @@ class Interation:
             matrix = sparse.kron(matrix, matrix_j)
         return matrix
 
+    @property
+    def multipliers_strings(self) -> List[str]:
+        if self._multipliers_strings is None:
+            return ["x".join(map(str, matrix.shape)) + " matrix" for matrix in self.multipliers]
+        return self._multipliers_strings
+
 
 class HamiltonianTerm(NamedTuple):
-    interaction: Interation
+    operator: Operator
     envelope: Envelope
+    use_hc: bool = False
 
 
 class Hamiltonian:
@@ -154,7 +173,7 @@ class Hamiltonian:
         if subsystems is None:
             subsystems = self.subsystems
         self._h0_terms = [
-            HamiltonianTerm(Interation([subsystem], [subsystem.get_h0_matrix()]), ConstantEnvelope(1.))
+            HamiltonianTerm(Operator([subsystem], [subsystem.get_h0_matrix()]), ConstantEnvelope(1.))
             for subsystem in subsystems
         ]
         return self
@@ -163,17 +182,19 @@ class Hamiltonian:
         """Disables H0 terms"""
         return self.use_h0([])
 
-    def add_interaction_term(self, interaction: Interation, envelope: Envelope):
+    def add_interaction_term(self, operator: Operator, envelope: Envelope = None, use_hc: bool = False):
         """Adds interaction term to the hamiltonian
 
-        :param interaction: Interaction instance
+        :param operator: Operator instance
         :param envelope: Term envelope
         """
-        for subsystem in interaction.subsystems:
-            assert subsystem in self.subsystems, f"Hamiltonian doesnt work with subsystem {subsystem.name}"
+        for subsystem in operator.subsystems:
+            assert subsystem in self.subsystems, f"Hamiltonian doesn't work with subsystem {subsystem.name}"
+        if envelope is None:
+            envelope = ConstantEnvelope(1.)
         envelopes = envelope.expand() if isinstance(envelope, SumEnvelope) else [envelope]
         for envelope in envelopes:
-            self._interaction_terms.append(HamiltonianTerm(interaction, envelope))
+            self._interaction_terms.append(HamiltonianTerm(operator, envelope, use_hc))
         return self
 
     def factorized_state(self, states: List[np.ndarray]) -> np.ndarray:
@@ -221,3 +242,26 @@ class Hamiltonian:
         for term in other.interaction_terms:
             self._interaction_terms.append(term)
         self._cache.clear()
+
+    def print(self):
+        if len(self.h0_terms) == 0:
+            print("=> No H0 terms")
+        else:
+            print("=> H0 terms:")
+            for idx, term in enumerate(self.h0_terms):
+                subsystem = term.operator.subsystems[0]
+                print(f"{idx + 1}) {subsystem.name}: {subsystem.get_h0_string()}")
+
+        if len(self.interaction_terms) == 0:
+            print("=> No Hint(t) terms")
+        else:
+            print("=> Hint(t) terms:")
+            for idx, term in enumerate(self.interaction_terms):
+                names = ", ".join([subsystem.name for subsystem in term.operator.subsystems])
+                multipliers = ", ".join(term.operator.multipliers_strings)
+                h_str = f"{idx + 1}) [{names}]: {term.envelope.to_string()} * [{multipliers}]"
+                if term.use_hc:
+                    h_str += " + h.c."
+                print(h_str)
+
+        print("")
