@@ -37,12 +37,12 @@ class Atom(SubSystem):
 
     def sp(self, *levels) -> sparse.csc_matrix:
         sp = np.zeros([self.dim, self.dim])
-        sp[levels[0], levels[1]] = 1.
+        sp[levels[1], levels[0]] = 1.
         return sparse.csc_matrix(sp)
 
     @staticmethod
     def get_sp_string(*levels) -> str:
-        return f"|{levels[0]}><{levels[1]}|"
+        return f"|{levels[1]}><{levels[0]}|"
 
     def get_h0_matrix(self) -> sparse.csc_matrix:
         return sparse.csc_matrix(np.diag(self._frequencies))

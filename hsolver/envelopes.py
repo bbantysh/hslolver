@@ -415,18 +415,18 @@ class PeriodicEnvelope(Envelope):
     def to_string(self) -> str:
         if self.frequency > 0.:
             if self.phase > 0.:
-                string = f"-i·[{self.frequency}t-{self.phase}]"
+                string = f"-i·[{self.frequency}·t-{self.phase}]"
             elif self.phase < 0.:
-                string = f"-i·[{self.frequency}t+{-self.phase}]"
+                string = f"-i·[{self.frequency}·t+{-self.phase}]"
             else:
-                string = f"-i·{self.frequency}t"
+                string = f"-i·{self.frequency}·t"
         else:
             if self.phase > 0.:
-                string = f"i·[{-self.frequency}t+{self.phase}]"
+                string = f"i·[{-self.frequency}·t+{self.phase}]"
             elif self.phase < 0.:
-                string = f"i·[{-self.frequency}t-{self.phase}]"
+                string = f"i·[{-self.frequency}·t-{self.phase}]"
             else:
-                string = f"i·{-self.frequency}t"
+                string = f"i·{-self.frequency}·t"
         string = f"exp({string})"
         if self.amplitude != 1.:
             string = f"{self.amplitude}·{string}"
