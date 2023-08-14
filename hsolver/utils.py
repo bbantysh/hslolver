@@ -133,6 +133,12 @@ def format_bytes(size: int) -> str:
     return f"{size:.1f} {power_labels[n]}"
 
 
+def format_time(seconds: float) -> str:
+    if seconds >= 60:
+        return f"{int(np.floor(seconds / 60))} min. {seconds % 60:.1f} sec."
+    return f"{seconds:.1f} sec."
+
+
 class ProgressPrinter:
     """Class for printing the progress of calculations
 
@@ -176,7 +182,8 @@ class ProgressPrinter:
 
         :return: Line to print
         """
-        return f"{self.title}: {self.current_progress}% ({self.num_steps} steps, {time() - self.time_start:.1f} sec.)"
+        dt = format_time(time() - self.time_start)
+        return f"{self.title}: {self.current_progress}% ({self.num_steps} steps, {dt})"
 
     def update(self, value: float):
         """Updates the progress with new iterator value

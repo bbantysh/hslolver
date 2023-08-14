@@ -15,7 +15,16 @@ import scipy.sparse.linalg
 
 from hsolver.hamiltonian import Hamiltonian, HamiltonianTerm, SubSystem
 from hsolver.envelopes import Envelope, get_common_period
-from hsolver.utils import ProgressPrinter, transform_sv_tensor, mkron, sparse_sum, is_dm, purify, format_bytes
+from hsolver.utils import (
+    ProgressPrinter,
+    transform_sv_tensor,
+    mkron,
+    sparse_sum,
+    is_dm,
+    purify,
+    format_bytes,
+    format_time
+)
 
 
 class TimeInterval:
@@ -289,13 +298,13 @@ class SystemEvolutionSolver:
 
             # Double check
             assert time_list_interval[-1] == t_stop, "Something went wrong"
-            self.print(f"* Solved in {time() - solver_interval_time_start:.1f} sec.")
+            self.print(f"* Solved in {format_time(time() - solver_interval_time_start)}")
 
             self._time_list += time_list_interval
             self._state_list += state_list_interval
 
         self.print("============================")
-        self.print(f"* Total time elapsed {time() - solver_time_start:.1f} sec.")
+        self.print(f"* Total time elapsed {format_time(time() - solver_time_start)}")
 
         return self
 
