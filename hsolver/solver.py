@@ -5,107 +5,23 @@ Author: Boris Bantysh
 E-mail: bbantysh60000@gmail.com
 License: GPL-3.0
 """
-from typing import List, Union, Optional, Tuple
-from functools import cached_property
+from typing import List, Union
 from time import time
 
 import numpy as np
 import scipy.sparse as sparse
 import scipy.sparse.linalg
 
-from hsolver.hamiltonian import Hamiltonian, HamiltonianTerm, SubSystem
-from hsolver.envelopes import Envelope, get_common_period
+from hsolver.hamiltonian import Hamiltonian, SubSystem, TimeInterval
 from hsolver.utils import (
     ProgressPrinter,
     transform_sv_tensor,
-    mkron,
-    sparse_sum,
     is_dm,
     purify,
     format_bytes,
     format_time,
     sparse_expm
 )
-
-
-class TimeInterval:
-    """Evolution time interval.
-
-    :param time_start: Time the envelope is starting (None for -infinity).
-    :param time_stop: Time the envelope is stopping (None for +infinity).
-    :param terms: Hamiltonian terms that are acting in the interval.
-    """
-
-    def __init__(self, time_start: float, time_stop: float, terms: List[HamiltonianTerm]):
-        self.time_start = time_start
-        self.time_stop = time_stop
-        self.time_duration = time_stop - time_start
-        assert self.time_duration > 0., "Invalid time interval"
-
-        self.terms = terms
-
-    @cached_property
-    def subsystems(self):
-        """Subsystems that are touched in the interval."""
-        subsystems = []
-        for term in self.terms:
-            for subsystem in term.operator.subsystems:
-                if subsystem not in subsystems:
-                    subsystems.append(subsystem)
-        return subsystems
-
-    @cached_property
-    def dim(self) -> int:
-        dim = 1
-        for subsystem in self.subsystems:
-            dim *= subsystem.dim
-        return dim
-
-    @cached_property
-    def terms_full_matrices_and_envelopes(self) -> List[Tuple[sparse.csc_matrix, Envelope]]:
-        """Full matrices of each interval term."""
-        matrices = []
-        for term in self.terms:
-            matrices_to_multiply = (
-                term.operator.multipliers[term.operator.subsystems.index(subsystem)]
-                if subsystem in term.operator.subsystems
-                else sparse.eye(subsystem.dim, format="csc")
-                for subsystem in self.subsystems
-            )
-            matrix = mkron(*matrices_to_multiply)
-            matrices.append((matrix, term.envelope))
-            if term.use_hc:
-                matrices.append((matrix.conj().T, term.envelope.conj()))
-        return matrices
-
-    @cached_property
-    def period(self) -> Optional[float]:
-        """Hamiltonian period within the interval."""
-        return get_common_period([term.envelope for term in self.terms])
-
-    def get_hamiltonian(self, t: float) -> sparse.csc_matrix:
-        """Get the interval hamiltonian matrix at specific time point.
-
-        :param t: Time point.
-        :return: Hamiltonian matrix.
-        """
-        assert self.time_start <= t < self.time_stop, "Wrong time point"
-        return sparse_sum([
-            envelope(t) * matrix
-            for matrix, envelope in self.terms_full_matrices_and_envelopes
-        ])
-
-    def get_hamiltonian_derivative(self, t: float) -> sparse.csc_matrix:
-        """Get the interval hamiltonian matrix derivative at specific time point.
-
-        :param t: Time point.
-        :return: Hamiltonian matrix.
-        """
-        assert self.time_start <= t < self.time_stop, "Wrong time point"
-        return sparse_sum([
-            envelope.drv(t) * matrix
-            for matrix, envelope in self.terms_full_matrices_and_envelopes
-        ])
 
 
 class SystemEvolutionSolver:
@@ -165,43 +81,6 @@ class SystemEvolutionSolver:
         if self.verbose:
             print(msg)
 
-    def search_time_intervals(self, time_start: float, time_stop: float) -> List[TimeInterval]:
-        """Searches the time intervals within some window.
-
-        :param time_start: Window start time.
-        :param time_stop: Window stop time.
-        :return: List of time intervals.
-        """
-        time_points = [time_start, time_stop]
-        for term in self._hamiltonian.terms:
-            if term.envelope.time_start is not None and time_start <= term.envelope.time_start <= time_stop:
-                time_points.append(term.envelope.time_start)
-            if term.envelope.time_stop is not None and time_start <= term.envelope.time_stop <= time_stop:
-                time_points.append(term.envelope.time_stop)
-        time_points = np.sort(np.unique(time_points))
-
-        time_intervals = []
-        for idx in range(len(time_points) - 1):
-            time_interval_start = time_points[idx]
-            time_interval_stop = time_points[idx + 1]
-
-            terms = []
-            for term in self._hamiltonian.terms:
-                if term.envelope.time_start is not None and term.envelope.time_start >= time_interval_stop:
-                    # The term is not started yet
-                    continue
-                if term.envelope.time_stop is not None and term.envelope.time_stop <= time_interval_start:
-                    # The term is already stopped
-                    continue
-                terms.append(term)
-
-            time_interval = TimeInterval(time_interval_start, time_interval_stop, terms)
-            if time_interval.time_duration < self.min_step_size:
-                raise RuntimeError("Too small time interval. Try decreasing min_step_size")
-            time_intervals.append(time_interval)
-
-        return time_intervals
-
     def _prepare_init_state(self) -> np.ndarray:
         if type(self.init_state) is list:
             init_state = self._hamiltonian.factorized_state([
@@ -224,8 +103,11 @@ class SystemEvolutionSolver:
         state = self._prepare_init_state()
         self.print(f"* State tensor dimensions: {list(state.shape)} ({format_bytes(state.nbytes)})")
 
-        self.print("* Searching for evolution time intervals")
-        time_intervals = self.search_time_intervals(time_start, time_stop)
+        self.print("* Search for time intervals")
+        time_intervals = TimeInterval.search(self._hamiltonian.terms, time_start, time_stop)
+        for time_interval in time_intervals:
+            if time_interval.time_duration < self.min_step_size:
+                raise RuntimeError("Too small time interval. Try decreasing min_step_size")
 
         self._time_list = [time_start]
         self._state_list = [state]

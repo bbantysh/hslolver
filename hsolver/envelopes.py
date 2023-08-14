@@ -139,7 +139,7 @@ class ConstantEnvelope(Envelope):
         return PulseEnvelope(front_width, self.value, self.time_start, self.time_stop)
 
     def to_string(self) -> str:
-        return str(self.value)
+        return "" if self.value == 1. else str(self.value)
 
 
 class CustomEnvelope(Envelope):
@@ -192,6 +192,8 @@ class ProductEnvelope(Envelope):
             time_stop: Optional[float] = None,
             period: Optional[float] = None
     ):
+        multipliers = list(filter(lambda e: not isinstance(e, ConstantEnvelope) or e.value != 1., multipliers))
+
         if time_start is None:
             time_start_list = [envelope.time_start for envelope in multipliers if envelope.time_start is not None]
             time_start = None if len(time_start_list) == 0 else max(time_start_list)

@@ -7,13 +7,15 @@ License: GPL-3.0
 """
 from abc import ABC, abstractmethod
 from functools import cached_property
-from typing import NamedTuple, List
+from typing import NamedTuple, List, Tuple, Optional
 from collections import defaultdict
 
 import numpy as np
 import scipy.sparse as sparse
+from scipy import sparse as sparse
 
-from hsolver.envelopes import Envelope, ConstantEnvelope, SumEnvelope
+from hsolver.envelopes import Envelope, ConstantEnvelope, SumEnvelope, get_common_period
+from hsolver.utils import mkron, sparse_sum
 
 
 class SubSystem(ABC):
@@ -105,6 +107,122 @@ class HamiltonianTerm(NamedTuple):
     operator: Operator
     envelope: Envelope
     use_hc: bool = False
+
+
+class TimeInterval:
+    """Evolution time interval.
+
+    :param time_start: Time the envelope is starting (None for -infinity).
+    :param time_stop: Time the envelope is stopping (None for +infinity).
+    :param terms: Hamiltonian terms that are acting in the interval.
+    """
+
+    def __init__(self, time_start: float, time_stop: float, terms: List[HamiltonianTerm]):
+        self.time_start = time_start
+        self.time_stop = time_stop
+        self.time_duration = time_stop - time_start
+        assert self.time_duration > 0., "Invalid time interval"
+
+        self.terms = terms
+
+    @cached_property
+    def subsystems(self):
+        """Subsystems that are touched in the interval."""
+        subsystems = []
+        for term in self.terms:
+            for subsystem in term.operator.subsystems:
+                if subsystem not in subsystems:
+                    subsystems.append(subsystem)
+        return subsystems
+
+    @cached_property
+    def dim(self) -> int:
+        dim = 1
+        for subsystem in self.subsystems:
+            dim *= subsystem.dim
+        return dim
+
+    @cached_property
+    def terms_full_matrices_and_envelopes(self) -> List[Tuple[sparse.csc_matrix, Envelope]]:
+        """Full matrices of each interval term."""
+        matrices = []
+        for term in self.terms:
+            matrices_to_multiply = (
+                term.operator.multipliers[term.operator.subsystems.index(subsystem)]
+                if subsystem in term.operator.subsystems
+                else sparse.eye(subsystem.dim, format="csc")
+                for subsystem in self.subsystems
+            )
+            matrix = mkron(*matrices_to_multiply)
+            matrices.append((matrix, term.envelope))
+            if term.use_hc:
+                matrices.append((matrix.conj().T, term.envelope.conj()))
+        return matrices
+
+    @cached_property
+    def period(self) -> Optional[float]:
+        """Hamiltonian period within the interval."""
+        return get_common_period([term.envelope for term in self.terms])
+
+    def get_hamiltonian(self, t: float) -> sparse.csc_matrix:
+        """Get the interval hamiltonian matrix at specific time point.
+
+        :param t: Time point.
+        :return: Hamiltonian matrix.
+        """
+        assert self.time_start <= t < self.time_stop, "Wrong time point"
+        return sparse_sum([
+            envelope(t) * matrix
+            for matrix, envelope in self.terms_full_matrices_and_envelopes
+        ])
+
+    def get_hamiltonian_derivative(self, t: float) -> sparse.csc_matrix:
+        """Get the interval hamiltonian matrix derivative at specific time point.
+
+        :param t: Time point.
+        :return: Hamiltonian matrix.
+        """
+        assert self.time_start <= t < self.time_stop, "Wrong time point"
+        return sparse_sum([
+            envelope.drv(t) * matrix
+            for matrix, envelope in self.terms_full_matrices_and_envelopes
+        ])
+
+    @classmethod
+    def search(cls, hamiltonian_terms: List[HamiltonianTerm], time_start: float = -np.inf, time_stop: float = np.inf):
+        """Searches the time intervals within some time window for some list of Hamiltonian terms.
+
+        :param hamiltonian_terms: Hamiltonian terms
+        :param time_start: Window start time (-infinity by default).
+        :param time_stop: Window stop time (+infinity by default).
+        :return: List of time intervals.
+        """
+        time_points = [time_start, time_stop]
+        for term in hamiltonian_terms:
+            if term.envelope.time_start is not None and time_start <= term.envelope.time_start <= time_stop:
+                time_points.append(term.envelope.time_start)
+            if term.envelope.time_stop is not None and time_start <= term.envelope.time_stop <= time_stop:
+                time_points.append(term.envelope.time_stop)
+        time_points = np.sort(np.unique(time_points))
+
+        time_intervals = []
+        for idx in range(len(time_points) - 1):
+            time_interval_start = time_points[idx]
+            time_interval_stop = time_points[idx + 1]
+
+            terms = []
+            for term in hamiltonian_terms:
+                if term.envelope.time_start is not None and term.envelope.time_start >= time_interval_stop:
+                    # The term is not started yet
+                    continue
+                if term.envelope.time_stop is not None and term.envelope.time_stop <= time_interval_start:
+                    # The term is already stopped
+                    continue
+                terms.append(term)
+
+            time_intervals.append(cls(time_interval_start, time_interval_stop, terms))
+
+        return time_intervals
 
 
 class Hamiltonian:
@@ -256,12 +374,19 @@ class Hamiltonian:
             print("=> No Hint(t) terms")
         else:
             print("=> Hint(t) terms:")
-            for idx, term in enumerate(self.interaction_terms):
-                names = ", ".join([subsystem.name for subsystem in term.operator.subsystems])
-                multipliers = ", ".join(term.operator.multipliers_strings)
-                h_str = f"{idx + 1}) [{names}]: {term.envelope.to_string()} * [{multipliers}]"
-                if term.use_hc:
-                    h_str += " + h.c."
-                print(h_str)
+            for time_interval in TimeInterval.search(self.interaction_terms):
+                if len(time_interval.terms) == 0:
+                    continue
+                range_start = "-∞" if np.isinf(time_interval.time_start) else str(time_interval.time_start)
+                range_stop = "+∞" if np.isinf(time_interval.time_stop) else str(time_interval.time_stop)
+                print(f"==> t ∈ ({range_start}, {range_stop})")
+
+                for idx, term in enumerate(time_interval.terms):
+                    names = ", ".join([subsystem.name for subsystem in term.operator.subsystems])
+                    multipliers = ", ".join(term.operator.multipliers_strings)
+                    h_str = f"==> {idx + 1}) [{names}]: {term.envelope.to_string()} * [{multipliers}]"
+                    if term.use_hc:
+                        h_str += " + h.c."
+                    print(h_str)
 
         print("")
